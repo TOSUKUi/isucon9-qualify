@@ -277,38 +277,86 @@ module Isucari
       item_id = params['item_id'].to_i
       created_at = params['created_at'].to_i
 
-      db.query('BEGIN')
       items = if item_id > 0 && created_at > 0
-        # paging
-        begin
-          db.xquery("SELECT * FROM `items` WHERE (`seller_id` = ? OR `buyer_id` = ?) AND `status` IN (?, ?, ?, ?, ?) AND (`created_at` < ?  OR (`created_at` <= ? AND `id` < ?)) ORDER BY `created_at` DESC, `id` DESC LIMIT #{TRANSACTIONS_PER_PAGE + 1}", user['id'], user['id'], ITEM_STATUS_ON_SALE, ITEM_STATUS_TRADING, ITEM_STATUS_SOLD_OUT, ITEM_STATUS_CANCEL, ITEM_STATUS_STOP, Time.at(created_at), Time.at(created_at), item_id)
-        rescue
-          db.query('ROLLBACK')
-          halt_with_error 500, 'db error'
-        end
-      else
-        # 1st page
-        begin
-          db.xquery("SELECT * FROM `items` WHERE (`seller_id` = ? OR `buyer_id` = ?) AND `status` IN (?, ?, ?, ?, ?) ORDER BY `created_at` DESC, `id` DESC LIMIT #{TRANSACTIONS_PER_PAGE + 1}", user['id'], user['id'], ITEM_STATUS_ON_SALE, ITEM_STATUS_TRADING, ITEM_STATUS_SOLD_OUT, ITEM_STATUS_CANCEL, ITEM_STATUS_STOP)
-        rescue
-          db.query('ROLLBACK')
-          halt_with_error 500, 'db error'
-        end
-      end
+                # paging
+                begin
+                  db.xquery(
+                    "SELECT * FROM `items` WHERE (`seller_id` = ? OR `buyer_id` = ?) AND `status` IN (?, ?, ?, ?, ?) AND (`created_at` < ?  OR (`created_at` <= ? AND `id` < ?)) ORDER BY `created_at` DESC, `id` DESC LIMIT #{TRANSACTIONS_PER_PAGE + 1}", user['id'], user['id'], ITEM_STATUS_ON_SALE, ITEM_STATUS_TRADING, ITEM_STATUS_SOLD_OUT, ITEM_STATUS_CANCEL, ITEM_STATUS_STOP, Time.at(created_at), Time.at(created_at), item_id
+                  )
+                rescue StandardError
+                  halt_with_error 500, 'db error'
+                end
+              else
+                # 1st page
+                begin
+                  db.xquery(
+                    "SELECT * FROM `items` WHERE (`seller_id` = ? OR `buyer_id` = ?) AND `status` IN (?, ?, ?, ?, ?) ORDER BY `created_at` DESC, `id` DESC LIMIT #{TRANSACTIONS_PER_PAGE + 1}", user['id'], user['id'], ITEM_STATUS_ON_SALE, ITEM_STATUS_TRADING, ITEM_STATUS_SOLD_OUT, ITEM_STATUS_CANCEL, ITEM_STATUS_STOP
+                  )
+                rescue StandardError
+                  halt_with_error 500, 'db error'
+                end
+              end
+
+#      simple_sellers = begin
+#              seller_ids = items.map { |v| v['seller_id'] }
+#              result = db.xquery('SELECT id, account_name, num_sell_items FROM `users` WHERE `seller_id` IN ?', seller_ids)
+#              result.map { |v| [v['id'], v] }.to_h
+#            end
+#      simple_buyers = begin
+#              buyer_ids = items.map { |v| v['buyer_id'] if v['buyer_id'] != 0 }.compact
+#              result = db.xquery('SELECT id, account_name, num_sell_items FROM `users` WHERE `seller_id` IN ?', buyer_ids)
+#              result.map { |v| [v['id'], v] }.to_h
+#            end
+#      categories = begin
+#              category_ids = items.map { |v| v['category_id'] }
+#              result = db.xquery('SELECT items_child.id, items_child.parent_id, items_child.category_name, items_parent.category_name FROM items as items_child OUTER JOIN items as items_parent ON items_child.parent_id = items_parent.id WHERE items_child.id IN ?', category_ids)
+#              result.map do |v|
+#                [
+#                  v['items_child.id'],
+#                  {
+#                    'id' => v['items_child.id'],
+#                    'parent_id' => v['items_child.parent_id'],
+#                    'category_name' => v['items_child.category_name'],
+#                    'parent_category_name' => v['items_parent.category_name']
+#                  }
+#                ]
+#              end
+#            end
+
+#      item_details = items.map do |item|
+#        item_detail = {
+#          'id' => item['id'],
+#          'seller_id' => item['seller_id'],
+#          'seller' => simple_sellers[item['seller_id']],
+#          'buyer_id' => item['buyer_id'] == 0 ? nil : item['buyer_id'],
+#          'buyer' => simple_buyers[item['buyer_id']],
+#          'status' => item['status'],
+#          'name' => item['name'],
+#          'price' => item['price'],
+#          'description' => item['description'],
+#          'image_url' => get_image_url(item['image_name']),
+#          'category_id' => item['category_id'],
+#          # transaction_evidence_id
+#          # transaction_evidence_status
+#          # shipping_status
+#          'category' => categories[item['category_id']],
+#          'created_at' => item['created_at'].to_i
+#        }
+        
+#      end
 
       item_details = items.map do |item|
         seller = get_user_simple_by_id(item['seller_id'])
         if seller.nil?
-          db.query('ROLLBACK')
           halt_with_error 404, 'seller not found'
         end
 
         category = get_category_by_id(item['category_id'])
         if category.nil?
-          db.query('ROLLBACK')
           halt_with_error 404, 'category not found'
         end
 
+        
         item_detail = {
           'id' => item['id'],
           'seller_id' => item['seller_id'],
@@ -341,7 +389,8 @@ module Isucari
 
         transaction_evidence = db.xquery('SELECT * FROM `transaction_evidences` WHERE `item_id` = ?', item['id']).first
         unless transaction_evidence.nil?
-          shipping = db.xquery('SELECT * FROM `shippings` WHERE `transaction_evidence_id` = ?', transaction_evidence['id']).first
+          shipping = db.xquery('SELECT * FROM `shippings` WHERE `transaction_evidence_id` = ?',
+                               transaction_evidence['id']).first
           if shipping.nil?
             db.query('ROLLBACK')
             halt_with_error 404, 'shipping not found'
@@ -349,7 +398,7 @@ module Isucari
 
           ssr = begin
             api_client.shipment_status(get_shipment_service_url, 'reserve_id' => shipping['reserve_id'])
-          rescue
+          rescue StandardError
             db.query('ROLLBACK')
             halt_with_error 500, 'failed to request to shipment service'
           end
